@@ -1,0 +1,223 @@
+{
+  "info": {
+    "_postman_id": "127e06b3-1f4a-4914-b756-f5d62e848ff2",
+    "name": "SIP_TRACKER_TS_PG",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "54623577",
+    "_collection_link": "https://go.postman.co/collection/54623577-127e06b3-1f4a-4914-b756-f5d62e848ff2?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Authorization",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/auth/register",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/auth/login",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Investors",
+      "item": [
+        {
+          "name": "DisplayInvestors",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "InvestorById",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "InvestorHoldings",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "InvestorNetworth",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "SIP",
+      "item": [
+        {
+          "name": "CreateSip",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/sips",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "sips"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GetSipById",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "SipProcess",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "SipTransactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "const processSips = async (\n  req: Request<{ sip_id: string }>,\n  res: Response\n): Promise<Response> => {\n  const client = await pool.connect();\n\n  try {\n    const sip_id = req.params.sip_id;\n\n    await client.query(\"BEGIN\");\n\n    const sipQuery = `\n      SELECT * FROM sips\n      WHERE sip_id = $1\n    `;\n\n    const sipResult = await client.query(\n      sipQuery,\n      [sip_id]\n    );\n\n    if (sipResult.rows.length === 0) {\n      await client.query(\"ROLLBACK\");\n\n      return res.status(404).json({\n        message: \"SIP NOT FOUND.. \",\n      });\n    }\n\n    const sip = sipResult.rows[0];\n\n    const navQuery = `\n      SELECT *\n      FROM fund_nav_history\n      WHERE fund_id = $1\n      ORDER BY nav_date DESC\n      LIMIT 1\n    `;\n\n    const navResult = await client.query(\n      navQuery,\n      [sip.fund_id]\n    );\n\n    if (navResult.rows.length === 0) {\n      await client.query(\"ROLLBACK\");\n\n      return res.status(404).json({\n        message: \"Nav Details not found.\",\n      });\n    }\n\n    const nav = navResult.rows[0];\n\n    const units : number =\n      sip.sip_amount / nav.nav_value;\n\n    const installmentQuery = `\n      INSERT INTO sip_installments\n      (\n        sip_id,\n        installment_date,\n        amount,\n        nav_value,\n        units_allocated,\n        transaction_status\n      )\n      VALUES ($1, CURRENT_DATE, $2, $3, $4, $5)\n      RETURNING inst_id\n    `;\n\n    const installmentResult =\n      await client.query(installmentQuery, [\n        sip.sip_id,\n        sip.sip_amount,\n        nav.nav_value,\n        units,\n        \"SUCCESS\",\n      ]);\n\n    const installment_id =\n      installmentResult.rows[0].inst_id;\n\n    const transactionQuery = `\n      INSERT INTO investment_transactions\n      (\n        investor_id,\n        portfolio_id,\n        fund_id,\n        installment_id,\n        transaction_type,\n        transaction_amount,\n        nav_value,\n        units\n      )\n      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n      RETURNING transaction_id\n    `;\n\n    await client.query(transactionQuery, [\n      sip.investor_id,\n      sip.portfolio_id,\n      sip.fund_id,\n      installment_id,\n      \"BUY\",\n      sip.sip_amount,\n      nav.nav_value,\n      units,\n    ]);\n\n    const holdingCheckQuery = `\n      SELECT *\n      FROM holdings\n      WHERE investor_id = $1\n      AND fund_id = $2\n    `;\n\n    const holdingResult =\n      await client.query(holdingCheckQuery, [\n        sip.investor_id,\n        sip.fund_id,\n      ]);\n\n    if (holdingResult.rows.length > 0) {\n      const holding = holdingResult.rows[0];\n\n      const newUnits =\n        parseFloat(holding.total_units) +\n        parseFloat(units);\n\n      const avgNav =\n        (\n          holding.total_units *\n            holding.average_purchase_nav +\n          units * nav.nav_value\n        ) / newUnits;\n\n      const updateHoldingQuery = `\n        UPDATE holdings\n        SET total_units = $1,\n            average_purchase_nav = $2\n        WHERE holding_id = $3\n      `;\n\n      await client.query(updateHoldingQuery, [\n        newUnits,\n        avgNav,\n        holding.holding_id,\n      ]);\n    } else {\n      const insertHoldingQuery = `\n        INSERT INTO holdings\n        (\n          investor_id,\n          portfolio_id,\n          fund_id,\n          total_units,\n          average_purchase_nav\n        )\n        VALUES ($1, $2, $3, $4, $5)\n      `;\n\n      await client.query(insertHoldingQuery, [\n        sip.investor_id,\n        sip.portfolio_id,\n        sip.fund_id,\n        units,\n        nav.nav_value,\n      ]);\n    }\n\n    await client.query(\"COMMIT\");\n\n    await redisClient.del(\n      `holdings_${sip.investor_id}`\n    );\n\n    await redisClient.del(\n      `networth_${sip.investor_id}`\n    );\n\n    await redisClient.del(`sip_${sip_id}`);\n\n    return res.status(200).json({\n      message: \"SIP Processed Successfully.. \",\n      installment_id,\n    });\n  } catch (err: any) {\n    await client.query(\"ROLLBACK\");\n\n    console.log(err);\n\n    return res.status(500).json({\n      message: \"Error Processing SIP\",\n      error: err.message,\n    });\n  } finally {\n    client.release();\n  }\n};",
+                "type": "text"
+              },
+              {
+                "key": ")",
+                "value": "Promise<Response> => {"
+              }
+            ],
+            "url": {
+              "raw": "http://localhost:5000/api/sips/12/transactions",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "sips",
+                "12",
+                "transactions"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Fund",
+      "item": [
+        {
+          "name": "GetFunds",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "PostFunds",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "UpdateFunds",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "getDashboardData",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Profile",
+      "item": [
+        {
+          "name": "getProfileData",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
